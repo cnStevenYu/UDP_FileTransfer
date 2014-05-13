@@ -44,9 +44,24 @@ typedef enum ERR ERR;
 
 ERR argsProc(Args* args, char *comLine, int len);
 typedef struct File{
-	FILE *fp = NULL;
+	FILE *fp ;
 	char name[FILE_NAME];
 	char *path;
 	uint32_t size;
 	uint32_t blkSum;
 }File;
+BOOL fetchFilenameFromPath(char *filepath, char *filename, int nameLen);
+
+BOOL verifyIP(char *src, char *dst, int len);
+
+/*fetch the size of file, 
+ * return size if file is openned successfully
+ * or -1 when failed */
+uint32_t getFilesize(char *filepath);
+/*convert little-end uint to big-end uint and set it to dataToSend*/
+void setIntToNetChar(uint32_t filesize, char *dataToSend);
+uint32_t getIntFromNetChar(char *dataRecvd);
+uint32_t countBlocks(uint32_t filesize, uint32_t block);
+/*set sockaddr_in*/
+void setRemoteIP(struct sockaddr_in *remoteAddr, char *remoteIp, int port);
+File fileToSend;
