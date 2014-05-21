@@ -1,16 +1,16 @@
+#define _XOPEN_SOURCE
 #include "main.h"
+struct itimerval orignalTime;
+void setTimer(int interval, struct itimerval* oval);
+void retransmit(int signo);
 
-#define BLOCK 1024
-#define ZEROBYTE 1
-#define BLOCKNUM 4
-#define FILESIZE 4
-#define TYPE 1
 int main(int argc, char *argv[]){
+
 	fileToSend.fp = NULL;
 	//socket
 	sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
 	//set localAddr
-	bzero(&localAddr, sizeof(localAddr));
+	memset(&localAddr, 0, sizeof(localAddr));
 	localAddr.sin_family = AF_INET;
 	localAddr.sin_port = htons(RECV_PORT);
 	localAddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -24,37 +24,32 @@ int main(int argc, char *argv[]){
 	Args args;
 	int pos = 0;
 	int len = 0;
-	unsigned char *dataToSend;
 	while(fgets(comLine, BUF_SIZE, stdin) != NULL){
-		bzero(&args, sizeof(args));
+		memset(&args, 0, sizeof(args));
 		ssize_t n = 0;
+		Packet *pk;
 		switch(argsProc(&args, comLine, BUF_SIZE)){
 			case OK:
 				switch(args.type){
 					case SEND_MSG:
-						len = TYPE + strlen(args.data.msg) + ZEROBYTE;
-						dataToSend = (unsigned char*)malloc(len);
-						dataToSend[0] = 0x08;
-						pos = 1;
-						for(int i=0; i<strlen(args.data.msg); ){
-							dataToSend[pos++] = args.data.msg[i++];
-						}
-						dataToSend[pos] = '\0';
+						pk = pack(NULL, S_MSG, -1, &args);
 						//set remoteAddr
-						bzero(&remoteAddr, sizeof(remoteAddr));
+						memset(&remoteAddr, 0, sizeof(remoteAddr));
 						remoteAddr.sin_family = AF_INET;
 						remoteAddr.sin_port = htons(RECV_PORT);
 						remoteAddr.sin_addr.s_addr = inet_addr(args.remoteIp);
-						n = sendto(sockfd, dataToSend, len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+						n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
 						if(n == -1){
-							free(dataToSend);
+							free(pk->data);
+							free(pk);
 							perr_exit("sendto error\n");
 						}
-						free(dataToSend);
+						free(pk->data);
+						free(pk);
 						continue;
 					case SEND_FILE:
 						printf("send file\n");
-						bzero(&fileToSend, sizeof(File));
+						memset(&fileToSend, 0, sizeof(File));
 						fileToSend.path = args.data.filepath;
 						/*fetch filename from the args*/
 						if(!fetchFilenameFromPath(fileToSend.path, fileToSend.name, FILE_NAME)){
@@ -66,32 +61,23 @@ int main(int argc, char *argv[]){
 						fileToSend.size = getFilesize(fileToSend.path);
 						/*count the sum of blocks*/
 						fileToSend.blkSum = countBlocks(fileToSend.size, BLOCK);
+						fileToSend.curBlk = 0;	
 						/*data to send*/
-						bzero(&remoteAddr, sizeof(remoteAddr));
+						memset(&remoteAddr, 0, sizeof(remoteAddr));
 						remoteAddr.sin_family = AF_INET;
 						remoteAddr.sin_port = htons(RECV_PORT);
 						remoteAddr.sin_addr.s_addr = inet_addr(args.remoteIp);
-						
-						int filenameLen = strlen(fileToSend.name);
-						len = 1+filenameLen+1+FILESIZE+1;
-						dataToSend = (char *)malloc(len);
-						pos = 0;
-						dataToSend[pos++] = 0x1;
-						for(int i = 0; i < filenameLen; )
-							dataToSend[pos++] = fileToSend.name[i++];
-						dataToSend[pos++] = 0x0;	
-						/*convert filesize to network byte order*/
-						setIntToNetChar(fileToSend.size, &dataToSend[pos]);
-						pos += FILESIZE;
-						dataToSend[pos++] = 0x0;
+
+						pk = pack(&fileToSend, S_FILE, -1, NULL);
 						/*send data*/
-						n = 0;
-						n = sendto(sockfd, dataToSend,len , 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+						n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
 						if(n == -1){
-							free(dataToSend);
-							perr_exit("sendto error\n");
+							perror("Error:send to failed!\n");
 						}
-						free(dataToSend);
+						if(pk->data)
+							free(pk->data);
+						if(!pk)
+							free(pk);
 						continue;
 					case LIST_FRIENDS:
 						printf("list \n");
@@ -114,21 +100,34 @@ int main(int argc, char *argv[]){
 
 void* recvProc(void *args){ 
 	printf("Accepting connections ...\n");
+	/*register timer*/
+	struct sigaction act;
+	act.sa_handler = retransmit;
+	sigemptyset(&act.sa_mask);
+	act.sa_flags |= SA_RESTART;
+	sigaction(SIGALRM, &act, NULL);
+
 	ssize_t n = 0;
-	unsigned char dataRecvd[TYPE+BLOCKNUM+BLOCK];
+	BYTE dataRecvd[TYPE+BLOCKNUM+BLOCK];
 	char ipBuf[IP_LEN];
-	File fileToRecv;
+	//File fileToRecv;
 	while(1){
+		int pos = 0;
 		remoteAddrLen = sizeof(remoteAddr);
 		n = recvfrom(sockfd, dataRecvd,TYPE+BLOCKNUM+BLOCK , 0, (struct sockaddr*) &remoteAddr, &remoteAddrLen);
-		if (n == -1)
-			perr_exit("recvfrom error");
-		int pos = 0;
-		/*recv file*/
+		if (n == -1 || errno == EINTR){
+			if(errno == EINTR) {
+				perror("interrupted!\n");
+			}
+			if(n == -1)
+				perror("error!\n");
+		}
+		/*parse the data*/
+		//		parse(&fileToRecv, dataRecvd, TYPE+BLOCKNUM+BLOCK);
 		if(dataRecvd[pos] == 0x01){
 			printf("received from %s at %d packet is 01\n", inet_ntop(AF_INET, &remoteAddr.sin_addr, ipBuf, sizeof(ipBuf)), ntohs(remoteAddr.sin_port));
 			/*fetch file name*/
-			bzero(&fileToRecv, sizeof(File));
+			memset(&fileToRecv, 0, sizeof(File));
 			pos++;
 			int i = 0;
 			while(dataRecvd[pos] != '\0')
@@ -140,101 +139,95 @@ void* recvProc(void *args){
 			char dstDir [19] = "/home/yh/projects/";
 			int filepathLen = strlen(dstDir) + strlen(fileToRecv.name) + 1;	
 			fileToRecv.path = (char*)malloc(filepathLen);
-			bzero(fileToRecv.path,filepathLen); 
+			memset(fileToRecv.path, 0, filepathLen); 
 			strncat(fileToRecv.path, dstDir, strlen(dstDir));
 			strncat(fileToRecv.path, fileToRecv.name, strlen(fileToRecv.name));
 			/*open the file*/
 			if((fileToRecv.fp = fopen(fileToRecv.path, "wb+")) == NULL){
-				free(fileToRecv.path);
-				perr_exit("fopen fail!\n");
+				perror("Error:open file failed!\n");
 			}
 			free(fileToRecv.path);
 			/*create ack pack*/
-			int len = TYPE+BLOCKNUM;
-			unsigned char *buf = (unsigned char *)malloc(len);
-			buf[0] = 0x04;
-			setIntToNetChar(0, &buf[1]);
-			n = sendto(sockfd, buf, len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
-			free(buf);
-			if (n == -1)
-				perr_exit("recvfrom error");
+			fileToRecv.preBlk = -1;
+			fileToRecv.curBlk = 0;
+			Packet *pk = pack(NULL, S_ACK, fileToRecv.curBlk, NULL);
+			n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+			if (n == -1){
+				perror("Error:sendto failed!\n");
+			}
+			free(pk->data);
+			free(pk);
+			/*start timer*/
+			setTimer(curInterval, &orignalTime);
 		} 
 		else{
 			if(dataRecvd[pos] == 0x02){
 				printf("received from %s at %d packet is 02\n", inet_ntop(AF_INET, &remoteAddr.sin_addr, ipBuf, sizeof(ipBuf)), ntohs(remoteAddr.sin_port));
+				repeat = 0;//reset repeat
 				uint32_t blkNum = getIntFromNetChar(&dataRecvd[1]);
-				unsigned char *dataBlock;
+				fileToRecv.curBlk = blkNum + 1;
+				BYTE *dataBlock;
 				ssize_t nwrite;
 				/*write to file*/
 				fseek(fileToRecv.fp, blkNum*BLOCK, SEEK_SET);
-				if(blkNum == fileToRecv.blkSum - 1){
-					int r = fileToRecv.size % BLOCK;
-					if(r>0){
-						dataBlock = (unsigned char*)malloc(r);
-						for(int i=0; i < r;i++){
-							dataBlock[i] = dataRecvd[TYPE+BLOCKNUM+i];
-						}	
-						nwrite = fwrite(dataBlock, sizeof(unsigned char), r, fileToRecv.fp);
-					}
-					else{
-						dataBlock = (unsigned char *)malloc(BLOCK);
-						for(int i=0; i < BLOCK;i++){
-							dataBlock[i] = dataRecvd[TYPE+BLOCKNUM+i];
-						}	
-						nwrite = fwrite(dataBlock, sizeof(unsigned char), BLOCK, fileToRecv.fp);
-					}
-					fclose(fileToRecv.fp);
-					fileToRecv.fp = NULL;
-
-				}
-				else{
-					dataBlock = (unsigned char *)malloc(BLOCK);
+				if(blkNum < fileToRecv.blkSum - 1){
+					dataBlock = (BYTE *)malloc(BLOCK);
 					for(int i=0; i < BLOCK;i++){
 						dataBlock[i] = dataRecvd[TYPE+BLOCKNUM+i];
 					}	
-					nwrite = fwrite(dataBlock, sizeof(unsigned char), BLOCK, fileToRecv.fp);
+					nwrite = fwrite(dataBlock, sizeof(BYTE), BLOCK, fileToRecv.fp);
+					/*request next block*/
+					fileToRecv.preBlk = fileToRecv.curBlk;
+					Packet *pk = pack(NULL, S_ACK, fileToRecv.curBlk, NULL);
+					n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+					if (n == -1){
+						perror("Error:sendto failed!\n");
+					}
+					free(pk->data);
+					free(pk);
+					/*reset timer*/
+					setTimer(curInterval, NULL);
+				}	
+				else{
+					int r = fileToRecv.size % BLOCK;
+					int dataLen = r > 0 ? r :  BLOCK;
+					dataBlock = (BYTE *)malloc(dataLen);
+					for(int i=0; i < dataLen;i++){
+						dataBlock[i] = dataRecvd[TYPE+BLOCKNUM+i];
+					}	
+					nwrite = fwrite(dataBlock, sizeof(BYTE), dataLen, fileToRecv.fp);
+					fclose(fileToRecv.fp);
+					fileToRecv.fp = NULL;
 				}
 				free(dataBlock);	
-				/*request next block*/
-				if(blkNum < fileToRecv.blkSum - 1){
-					int len = TYPE+BLOCKNUM;
-					unsigned char *buf = (unsigned char *)malloc(len);
-					buf[0] = 0x04;
-					setIntToNetChar(blkNum+1, &buf[1]);
-					n = sendto(sockfd, buf, len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
-					free(buf);
-					if (n == -1)
-						perr_exit("recvfrom error");
-				}	
 			}
 			else{
 				if(dataRecvd[pos] == 0x04){
 					printf("received from %s at %d packet is 04\n", inet_ntop(AF_INET, &remoteAddr.sin_addr, ipBuf, sizeof(ipBuf)), ntohs(remoteAddr.sin_port));
-					int len = TYPE+BLOCKNUM+BLOCK;	
-					unsigned char *dataToSend = (unsigned char*)malloc(len);
-					dataToSend[0] = 0x02;
+					//sleep(14);
 					/*recv ack*/
 					uint32_t reqNum = getIntFromNetChar(&dataRecvd[1]);
-					if(reqNum < fileToSend.blkSum) {
-						setIntToNetChar(reqNum, &dataToSend[1]);
-						/*fetch data from file*/
-						if(fileToSend.fp == NULL) {//not open
-							if((fileToSend.fp = fopen(fileToSend.path, "rb")) == NULL)
-								perr_exit("file open failed!\n");
+					if(fileToSend.curBlk == reqNum){
+						if(reqNum < fileToSend.blkSum) {
+							/*send data*/
+							Packet *pk = pack(&fileToSend, S_DATA, reqNum, NULL);
+							n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+							if(n == -1){
+								perror("Error:sendto failed!\n");
+							}
+							free(pk->data);
+							free(pk);
+
 						}
-						fseek(fileToSend.fp, reqNum*BLOCK, SEEK_SET);
-						ssize_t nread = fread(&dataToSend[TYPE+BLOCKNUM], sizeof(unsigned char), BLOCK, fileToSend.fp);
-						/*send*/
-						n = sendto(sockfd, dataToSend, len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
-						free(dataToSend);
-						if(n == -1)
-							perr_exit("sendto error");
-							
+						else{
+							/*the receiver has received the last pack*/
+							fclose(fileToSend.fp);
+							fileToSend.fp = NULL;
+						}
+						fileToSend.curBlk = reqNum + 1;
 					}
 					else{
-						/*the receiver has received the last pack*/
-						fclose(fileToSend.fp);
-						fileToSend.fp = NULL;
+						printf("drop duplicate packet\n");
 					}
 
 				}
@@ -247,7 +240,7 @@ void* recvProc(void *args){
 				}
 			}
 		}
-		
+
 
 		//unpack(buf, BUF_SIZE);
 		/*	
@@ -268,7 +261,7 @@ ERR argsProc(Args* args, char *comLine, int len){
 		pos++;
 	if(comLine[pos] == '\n')
 		return ARGS_FORMAT_ERR;
-    /*send file: s remote_ip filepath*/
+	/*send file: s remote_ip filepath*/
 	if(comLine[pos] == 's'){
 		args->type = SEND_FILE;
 		pos++;
@@ -339,7 +332,7 @@ BOOL verifyIP(char *src, char *dst, int len){
 }
 /*fetch filename from fielpath to filename, return false if filename it too long*/
 BOOL fetchFilenameFromPath(char *filepath, char *filename, int nameLen){
-	bzero(filename, nameLen);
+	memset(filename, 0, nameLen);
 	int pathLen = strlen(filepath);
 	int pos = pathLen - 1;	
 	while(filepath[pos] != '/' && pos != 0)
@@ -358,7 +351,7 @@ uint32_t getFilesize(char *filepath){
 	FILE *fp;
 	uint32_t size;
 	if((fp = fopen(filepath, "rb")) == NULL)
-	   perror("file open failed!\n");	
+		perror("file open failed!\n");	
 	if(fseek(fp, 0L, SEEK_END) < 0)
 		perror("file seek failed!\n");
 	size = ftell(fp);	
@@ -375,17 +368,109 @@ void setRemoteIP(struct sockaddr_in *remoteAddr, char *remoteIp, int port){
 void setIntToNetChar(uint32_t filesize, char *dataToSend){
 	uint32_t fileszn = htonl(filesize);
 	for(int i = 0; i < FILESIZE; i++){
-		dataToSend[i] = *((unsigned char *)(&fileszn)+i);
+		dataToSend[i] = *((BYTE *)(&fileszn)+i);
 	}
 }
 uint32_t getIntFromNetChar(char *dataRecvd){
 	int i;
 	uint32_t filesize;
 	for(i = 0; i<FILESIZE; i++)
-		((unsigned char *)&filesize)[i] = dataRecvd[i];
+		((BYTE *)&filesize)[i] = dataRecvd[i];
 	return ntohl(filesize);
 }
 uint32_t countBlocks(uint32_t filesize, uint32_t block){
 	uint32_t r = filesize % (block+1);
 	return (filesize - r) / block + 1;
+}
+Packet* pack(File *file, SEND_TYPE type, int blkNum, Args* args){
+	Packet *pk;
+	if((pk = (Packet*)malloc(sizeof(Packet))) == NULL) 
+		return NULL;
+	int pos = 0;
+	int filenameLen;
+
+	switch(type){
+		case S_FILE:
+			filenameLen	= strlen(file->name);
+			pk->len = TYPE+filenameLen+ZEROBYTE+FILESIZE+ZEROBYTE;
+			pk->data = (char *)malloc(pk->len);
+			pos = 0;
+			pk->data[pos++] = 0x1;
+			for(int i = 0; i < filenameLen; )
+				pk->data[pos++] = file->name[i++];
+			pk->data[pos++] = 0x0;	
+			/*convert filesize to network byte order*/
+			setIntToNetChar(file->size, &pk->data[pos]);
+			pos += FILESIZE;
+			pk->data[pos++] = 0x0;
+			break;
+		case S_DATA:
+			pk->len = TYPE+BLOCKNUM+BLOCK;	
+			pk->data = (BYTE*)malloc(pk->len);
+			pk->data[0] = 0x02;
+			setIntToNetChar(blkNum, &pk->data[1]);
+			/*fetch data from file*/
+			if(file->fp == NULL) {//not open
+				printf("open file :%s\n", file->path);
+				if((file->fp = fopen(file->path, "rb")) == NULL)
+					perr_exit("file open failed!\n");
+			}
+			fseek(file->fp, blkNum*BLOCK, SEEK_SET);
+			ssize_t nread = fread(&pk->data[TYPE+BLOCKNUM], sizeof(BYTE), BLOCK, file->fp);
+			break;
+		case S_ACK:
+			pk->len = TYPE+BLOCKNUM;
+			pk->data = (BYTE *)malloc(pk->len);
+			pk->data[0] = 0x04;
+			setIntToNetChar(blkNum, &pk->data[1]);
+			break;
+		case S_MSG:
+			pk->len = TYPE + strlen(args->data.msg) + ZEROBYTE;
+			pk->data = (BYTE*)malloc(pk->len);
+			pk->data[0] = 0x08;
+			pos = 1;
+			for(int i=0; i<strlen(args->data.msg); ){
+				pk->data[pos++] = args->data.msg[i++];
+			}
+			pk->data[pos] = '\0';
+			break;
+	}
+	return pk;
+}
+void setTimer(int interval, struct itimerval *oval) 
+{
+	struct itimerval val;
+	val.it_value.tv_sec=interval;
+	val.it_value.tv_usec=0;
+	val.it_interval.tv_sec=0; 
+	val.it_interval.tv_usec=0;
+	setitimer(ITIMER_REAL,&val,oval);
+}
+
+void retransmit(int signo)
+{
+	repeat++;
+	printf("retransmit ack %d\n", fileToRecv.curBlk);
+	/*retransmit ack pack*/
+	if(repeat <= MAX_REPEAT){//continuous repeat should not more than max
+		if(fileToRecv.curBlk < fileToRecv.blkSum){	
+			Packet *pk = pack(NULL, S_ACK, fileToRecv.curBlk, NULL);
+			int n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+			if (n == -1){
+				perror("Error:sendto failed!\n");
+			}
+			free(pk->data);
+			free(pk);
+			/*inc timer*/
+			curInterval += INC_INTERVAL;
+			setTimer(curInterval, NULL);
+		}
+		else{
+			curInterval = INIT_INTERVAL;
+			printf("recvd!\n");
+		}
+	}
+	else{
+		printf("network error!\n");
+	}
 }
