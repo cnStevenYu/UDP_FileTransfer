@@ -9,6 +9,10 @@
 #include <ctype.h>
 #include <signal.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
+//#include <net/if.h>
+#include <linux/if.h>
+#include <netdb.h>
 #include "wrap.h"
 
 #define BUF_SIZE 512
@@ -17,6 +21,7 @@
 #define RECV_PORT 8081
 #define IP_LEN 16
 #define MAX_MSG_LEN (BUF_SIZE - IP_LEN - 24)
+
 #define BLOCK 512
 #define ZEROBYTE 1
 #define BLOCKNUM 4
@@ -33,7 +38,7 @@ typedef enum ERR {OK, ARGS_FORMAT_ERR, IP_FORMAT_ERR} ERR;
 /*args type*/
 enum ARGTYPE{SEND_MSG, SEND_FILE, LIST_FRIENDS, QUIT} ;
 /*The type of data to be sent*/
-typedef enum {S_FILE, S_ACK, S_DATA, S_MSG}SEND_TYPE;
+typedef enum {S_FILE, S_ACK, S_DATA, S_MSG, S_BCAST_REQ, S_BCAST_ACK}SEND_TYPE;
 /*arguments*/
 typedef struct Args{
 	enum ARGTYPE type;
@@ -67,6 +72,11 @@ typedef struct Task{
 	File fileToSend;
 	File fileToRecv;
 }Task;
+typedef struct FriendList {
+	/*the ip of friends in the LAN*/
+	char data[255][IP_LEN];
+	int curPos;
+} FriendList;
 
 int sockfd;
 /*local ip address*/
@@ -74,12 +84,15 @@ struct sockaddr_in localAddr;
 /*remote ip address*/
 struct sockaddr_in remoteAddr;
 socklen_t remoteAddrLen;
-
+/*file*/
 File fileToSend;
 File fileToRecv;
-
+/*timer */
 int curInterval = INIT_INTERVAL;
 int repeat = 0;
+
+FriendList friendList;
+
 /*recv function*/
 void* recvProc(void *args);
 

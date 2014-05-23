@@ -1,10 +1,16 @@
 #define _XOPEN_SOURCE
+
 #include "main.h"
 struct itimerval orignalTime;
 void setTimer(int interval, struct itimerval* oval);
 void retransmit(int signo);
 
+int getLocalIp(char *ipaddr);
+void initFriendList(FriendList *list, int length);
+void delFriendList(FriendList *list);
 int main(int argc, char *argv[]){
+	/*init friends list*/
+	//initFriendList(&friendList);
 
 	fileToSend.fp = NULL;
 	//socket
@@ -17,17 +23,22 @@ int main(int argc, char *argv[]){
 	//bind
 	Bind(sockfd, (struct sockaddr *)&localAddr, sizeof(localAddr));
 
-	char comLine[BUF_SIZE];
 	pthread_t recvThr;
 	recvThr = pthread_create(&recvThr, NULL, &recvProc, NULL);
 	/*arguments*/
 	Args args;
+	char comLine[BUF_SIZE];
 	int pos = 0;
 	int len = 0;
 	while(fgets(comLine, BUF_SIZE, stdin) != NULL){
 		memset(&args, 0, sizeof(args));
 		ssize_t n = 0;
 		Packet *pk;
+		int so_broadcast = 1;  
+		char buffer[1024];
+		struct ifreq *ifr;  
+		struct ifconf ifc;  
+		struct sockaddr_in broadcast_addr; //广播地址
 		switch(argsProc(&args, comLine, BUF_SIZE)){
 			case OK:
 				switch(args.type){
@@ -80,7 +91,58 @@ int main(int argc, char *argv[]){
 							free(pk);
 						continue;
 					case LIST_FRIENDS:
-						printf("list \n");
+
+						// 获取所有套接字接口  
+						ifc.ifc_len = sizeof(buffer);  
+						ifc.ifc_buf = buffer;  
+						if (ioctl(sockfd, SIOCGIFCONF, (char *) &ifc) < 0)  
+						{  
+							perror("ioctl-conf:");  
+							return -1;  
+						}  
+						ifr = ifc.ifc_req;  
+						for (int j = ifc.ifc_len / sizeof(struct ifreq); --j >= 0; ifr++)  
+						{  
+							if (!strcmp(ifr->ifr_name, "eth0"))  
+							{  
+								if (ioctl(sockfd, SIOCGIFFLAGS, (char *) ifr) < 0)  
+								{  
+									perror("ioctl-get flag failed:");  
+								}  
+								break;  
+							}  
+						}  
+
+						//将使用的网络接口名字复制到ifr.ifr_name中，由于不同的网卡接口的广播地址是不一样的，因此指定网卡接口  
+						//strncpy(ifr.ifr_name, IFNAME, strlen(IFNAME));  
+						//发送命令，获得网络接口的广播地址  
+						if (ioctl(sockfd, SIOCGIFBRDADDR, ifr) == -1)  
+						{  
+							perror("ioctl error");  
+							return -1;  
+						}  
+						//将获得的广播地址复制到broadcast_addr  
+						memcpy(&broadcast_addr, (char *)&ifr->ifr_broadaddr, sizeof(struct sockaddr_in));  
+						//设置广播端口号  
+						printf("\nBroadcast-IP: %s\n", inet_ntoa(broadcast_addr.sin_addr));  
+						broadcast_addr.sin_family = AF_INET;  
+						broadcast_addr.sin_port = htons(RECV_PORT);  
+
+						//默认的套接字描述符sock是不支持广播，必须设置套接字描述符以支持广播  
+						n = setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &so_broadcast,  
+								sizeof(so_broadcast));  
+
+						pk = pack(NULL, S_BCAST_REQ, -1, NULL);
+
+						n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&broadcast_addr, sizeof(broadcast_addr));
+						if(n == -1){
+							perror("Error:send to failed!\n");
+						}
+						if(pk->data)
+							free(pk->data);
+						if(!pk)
+							free(pk);
+
 						continue;
 					case QUIT:
 						printf("quit!\n");
@@ -157,8 +219,10 @@ void* recvProc(void *args){
 			}
 			free(pk->data);
 			free(pk);
+#ifdef _TIMER
 			/*start timer*/
 			setTimer(curInterval, &orignalTime);
+#endif
 		} 
 		else{
 			if(dataRecvd[pos] == 0x02){
@@ -186,7 +250,9 @@ void* recvProc(void *args){
 					free(pk->data);
 					free(pk);
 					/*reset timer*/
+#ifdef _TIMER
 					setTimer(curInterval, NULL);
+#endif
 				}	
 				else{
 					int r = fileToRecv.size % BLOCK;
@@ -237,20 +303,49 @@ void* recvProc(void *args){
 						/*msg*/
 						printf("msg:%s\n", &dataRecvd[1]);
 					}
+					else{
+						if(dataRecvd[0] == 0x10){
+							printf("received from %s at %d packet is 10\n", inet_ntop(AF_INET, &remoteAddr.sin_addr, ipBuf, sizeof(ipBuf)), ntohs(remoteAddr.sin_port));
+							//create broadcast ack pack
+							Packet *pk = pack(NULL, S_BCAST_ACK, -1, NULL);
+							n = sendto(sockfd, pk->data, pk->len, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+							if(n == -1){
+								perror("Error:sendto failed!\n");
+							}
+							free(pk->data);
+							free(pk);
+						}
+						else{
+							if(dataRecvd[0] == 0x12) {
+								printf("received from %s at %d packet is 12\n", inet_ntop(AF_INET, &remoteAddr.sin_addr, ipBuf, sizeof(ipBuf)), ntohs(remoteAddr.sin_port));
+								pos = 1;
+								if(friendList.curPos < 255) {
+									for(int i=0; i<IP_LEN && dataRecvd[pos] != '\0'; i++, pos++){
+										friendList.data[friendList.curPos][i] = dataRecvd[pos]; 
+									}
+									friendList.curPos++;
+								}
+								/*print ip of friends*/
+								for(int i=0; i<friendList.curPos; i++) {
+									printf("$%d:%s\n", i,friendList.data[i]); 
+								}
+							}
+						}
+					}
 				}
 			}
-		}
 
 
-		//unpack(buf, BUF_SIZE);
-		/*	
-			for(int i=0; i<n; i++)
-			buf[i] = toupper(buf[i]);
-			n = sendto(sockfd, buf, n, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
-			if(n == -1)
-			perr_exit("sendto error");
-			*/
-	}	
+			//unpack(buf, BUF_SIZE);
+			/*	
+				for(int i=0; i<n; i++)
+				buf[i] = toupper(buf[i]);
+				n = sendto(sockfd, buf, n, 0, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr));
+				if(n == -1)
+				perr_exit("sendto error");
+				*/
+		}	
+	}
 }
 
 ERR argsProc(Args* args, char *comLine, int len){
@@ -301,10 +396,15 @@ ERR argsProc(Args* args, char *comLine, int len){
 		}
 		return OK;
 	}
+	if(comLine[pos] == 'l'){
+		args->type = LIST_FRIENDS;
+		return OK;
+	}
 	if(comLine[pos] == 'q'){	
 		args->type = QUIT;
 		return OK;
 	}
+
 	return ARGS_FORMAT_ERR;
 }
 /*fetch ip address from src to dst, if ip format is wrong, return false*/
@@ -434,6 +534,18 @@ Packet* pack(File *file, SEND_TYPE type, int blkNum, Args* args){
 			}
 			pk->data[pos] = '\0';
 			break;
+		case S_BCAST_REQ:
+			pk->len = TYPE;
+			pk->data = (BYTE*)malloc(pk->len);
+			pk->data[0] = 0x10;
+			break;
+		case S_BCAST_ACK:
+			pk->len = TYPE + IP_LEN;
+			pk->data = (BYTE*)malloc(pk->len);
+			pk->data[0] = 0x12;
+			if(getLocalIp(&(pk->data[1])) < 0)
+				perror("get local ip error!\n");
+			pk->data[pk->len - 1] = '\0';
 	}
 	return pk;
 }
@@ -474,3 +586,40 @@ void retransmit(int signo)
 		printf("network error!\n");
 	}
 }
+int getLocalIp(char *ipaddr)
+{
+	int sock_get_ip;  
+	struct   sockaddr_in *sin;  
+	struct   ifreq ifr_ip;     
+
+	if ((sock_get_ip=socket(AF_INET, SOCK_STREAM, 0)) == -1)  
+	{  
+		printf("socket create failse...GetLocalIp!/n");  
+		return -1;  
+	}  
+
+	memset(&ifr_ip, 0, sizeof(ifr_ip));     
+	strncpy(ifr_ip.ifr_name, "eth0", sizeof(ifr_ip.ifr_name) - 1);     
+
+	if( ioctl( sock_get_ip, SIOCGIFADDR, &ifr_ip) < 0 )     
+	{     
+		return -1;     
+	}       
+	sin = (struct sockaddr_in *)&ifr_ip.ifr_addr;     
+	strcpy(ipaddr,inet_ntoa(sin->sin_addr));         
+
+	printf("local ip:%s \n",ipaddr);      
+	close( sock_get_ip );  
+	return 0;  
+}  
+/*
+void initFriendList(FriendList *list, int length);
+{
+	list->len = length;
+	list->data = (char**)malloc(list->len * sizeof(char*));
+	for(int i=0; i<list->len; i++){
+		list.data[i] = (char*)malloc(IP_LEN);
+	}
+	list->curPos = 0;
+}
+*/
