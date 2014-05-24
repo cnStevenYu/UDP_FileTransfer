@@ -4,6 +4,7 @@
 #include "args.h"
 #include "packet.h"
 #include "file.h"
+#include "host.h"
 #include "wrap.h"
 #include <pthread.h>
 

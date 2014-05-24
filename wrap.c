@@ -106,3 +106,12 @@ ssize_t Writen(int fd, const void *vptr, size_t n)
 	}
 	return n;
 }
+ssize_t Sendto(int socket, const void *message, size_t length,
+		const struct sockaddr_in *dest_addr, socklen_t dest_len)
+{
+	ssize_t n = sendto(socket, message, length, 0, 
+				(struct sockaddr*)dest_addr, dest_len);
+	if(n == -1){
+		perror("sendto error\n");
+	}
+}

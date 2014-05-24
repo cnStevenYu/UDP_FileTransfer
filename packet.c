@@ -15,32 +15,7 @@ uint32_t getIntFromNetChar(char *dataRecvd){
 	return ntohl(filesize);
 }
 
-int getLocalIp(char *ipaddr)
-{
-	int sock_get_ip;  
-	struct   sockaddr_in *sin;  
-	struct   ifreq ifr_ip;     
 
-	if ((sock_get_ip=socket(AF_INET, SOCK_STREAM, 0)) == -1)  
-	{  
-		printf("socket create failse...GetLocalIp!/n");  
-		return -1;  
-	}  
-
-	memset(&ifr_ip, 0, sizeof(ifr_ip));     
-	strncpy(ifr_ip.ifr_name, "eth0", sizeof(ifr_ip.ifr_name) - 1);     
-
-	if( ioctl( sock_get_ip, SIOCGIFADDR, &ifr_ip) < 0 )     
-	{     
-		return -1;     
-	}       
-	sin = (struct sockaddr_in *)&ifr_ip.ifr_addr;     
-	strcpy(ipaddr,inet_ntoa(sin->sin_addr));         
-
-	printf("local ip:%s \n",ipaddr);      
-	close( sock_get_ip );  
-	return 0;  
-}
 Packet* pack(File *file, SEND_TYPE type, int blkNum, Args* args){
 	Packet *pk;
 	if((pk = (Packet*)malloc(sizeof(Packet))) == NULL) 
@@ -107,4 +82,14 @@ Packet* pack(File *file, SEND_TYPE type, int blkNum, Args* args){
 			pk->data[pk->len - 1] = '\0';
 	}
 	return pk;
+}
+
+void freePacket(Packet *pk) 
+{
+	if(pk->data){
+		free(pk->data);
+	}
+	if(pk){
+		free(pk);
+	}
 }

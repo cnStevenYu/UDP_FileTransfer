@@ -1,5 +1,7 @@
 #ifndef __WRAP_H
 #define __WRAP_H
+#include <netinet/in.h>
+#include <string.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
@@ -16,4 +18,6 @@ ssize_t Write(int fd, const void *ptr, size_t bytes);
 void Close(int fd);
 ssize_t Readn(int fd, void *vptr, size_t n);
 ssize_t Writen(int fd, const void *vptr, size_t n);
+ssize_t Sendto(int socket, const void *message, size_t length,
+		const struct sockaddr_in *dest_addr, socklen_t dest_len);
 #endif

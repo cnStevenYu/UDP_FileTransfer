@@ -21,6 +21,5 @@ typedef struct {
 /*convert little-end uint to big-end uint and set it to dataToSend*/
 void setIntToNetChar(uint32_t filesize, char *dataToSend);
 uint32_t getIntFromNetChar(char *dataRecvd);
-
-Packet* pack(File *file, SEND_TYPE type, int blkNum, Args *args);	
-int getLocalIp(char *ipaddr);
+Packet* pack(File *file, SEND_TYPE type, int blkNum, Args *args);
+void freePacket(Packet *pk);	
