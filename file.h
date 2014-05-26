@@ -4,7 +4,7 @@
 typedef struct File{
 	FILE *fp ;
 	char name[FILE_NAME];
-	char *path;
+	char path[FILE_PATH];
 	uint32_t size;
 	uint32_t blkSum;
 	/*for the sender it's the block to be sent;

@@ -2,6 +2,7 @@
 #include "public.h"
 #include "args.h"
 #include "file.h"
+#include "host.h"
 
 #define BLOCK 512
 #define ZEROBYTE 1
