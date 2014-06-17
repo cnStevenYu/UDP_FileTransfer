@@ -1,7 +1,8 @@
 #define _XOPEN_SOURCE
 #define DEBUG
 #include "main.h"
-
+typedef enum {R_FILE=0x01, R_DATA=0x02, R_DATA_ACK=0x04, R_MSG=0x08, R_BCAST_REQ=0x10, R_BCAST_ACK=0x12} RECV_TYPE;
+//RECV_TYPE packetProc(BYTE *dataRecvd);
 int main(int argc, char *argv[]){
 	struct sockaddr_in localAddr;
 	/*remote ip address*/
@@ -85,7 +86,6 @@ void* recvProc(void *args){
 #ifdef _TIMER
 	registerTimer(retransmit);
 #endif
-
 	struct sockaddr_in *remoteAddr;
 	socklen_t remoteAddrLen;
 	BYTE *dataRecvd;
@@ -95,7 +95,11 @@ void* recvProc(void *args){
 		int pos = 0;
 		remoteAddr = (struct sockaddr_in*)malloc(sizeof (struct sockaddr_in));
 		remoteAddrLen = sizeof(struct sockaddr_in);
-		dataRecvd = (BYTE*)malloc(sizeof(TYPE + BLOCKNUM + BLOCK));
+		memset(remoteAddr, 0, sizeof(struct sockaddr_in));
+
+		dataRecvd = (BYTE*)malloc(TYPE + BLOCKNUM + BLOCK);
+		memset(dataRecvd, 0,TYPE + BLOCKNUM + BLOCK); 
+		
 		ssize_t n = recvfrom(sockfd, dataRecvd,TYPE+BLOCKNUM+BLOCK , 0, 
 					 (struct sockaddr*) remoteAddr, &remoteAddrLen);
 		if (n == -1 || errno == EINTR){
@@ -107,73 +111,70 @@ void* recvProc(void *args){
 		}
 		/*parse the data*/
 		//		parse(&fileToRecv, dataRecvd, TYPE+BLOCKNUM+BLOCK);
-		if(dataRecvd[pos] == 0x01){
+		switch(dataRecvd[0]){
+			case R_FILE:
 #ifdef DEBUG
-
-			printf("received from %s at %d packet is 01\n", 
-				    inet_ntop(AF_INET, &remoteAddr->sin_addr, 
-				    ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
+				printf("received from %s at %d packet is 01\n", 
+						inet_ntop(AF_INET, &remoteAddr->sin_addr, 
+						ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
 #endif
-			/*create new thread*/
-			DataAndIp data_and_ip;
-			data_and_ip.remoteIp = remoteAddr;
-			data_and_ip.dataRecvd = dataRecvd;
-			pthread_t recvFileThr;
-			recvFileThr = pthread_create(&recvFileThr, NULL, &recvFileProc, (void *)&data_and_ip);
+				/*create new thread*/
+				DataAndIp *data_and_ip = (DataAndIp *)malloc(sizeof(DataAndIp));
+				data_and_ip->remoteIp = remoteAddr;
+				data_and_ip->dataRecvd = dataRecvd;
+				pthread_t recvFileThr;
+				recvFileThr = pthread_create(&recvFileThr, NULL, &recvFileProc, (void *)data_and_ip);
 #ifdef _TIMER
-			/*start timer*/
-			setTimer(curInterval, &orignalTime);
+				/*start timer*/
+				setTimer(curInterval, &orignalTime);
 #endif
-		} 
-		else{
-			
-			if(dataRecvd[0] == 0x08){
+				break;
+			case R_MSG:
 #ifdef DEBUG
 				printf("received from %s at %d packet is 08\n", 
-					 	inet_ntop(AF_INET, &remoteAddr->sin_addr, 
-					 	ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
+						inet_ntop(AF_INET, &remoteAddr->sin_addr, 
+						ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
 #endif
 				/*msg*/
 				printf("msg:%s\n", &dataRecvd[1]);
-					
-			}
-			else{
-				if(dataRecvd[0] == 0x10){
+				free(dataRecvd);
+				free(remoteAddr);
+				break;
+			case R_BCAST_REQ:
 #ifdef DEBUG
-					printf("received from %s at %d packet is 10\n", 
-							inet_ntop(AF_INET, &remoteAddr->sin_addr, 
-							ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
+				printf("received from %s at %d packet is 10\n", 
+						inet_ntop(AF_INET, &remoteAddr->sin_addr, 
+						ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
 #endif
-					//create broadcast ack pack
-					Packet *pk = pack(NULL, S_BCAST_ACK, -1, NULL);
-					Sendto(sockfd, pk->data, pk->len, remoteAddr, sizeof(struct sockaddr_in));
-					freePacket(pk);
-				}
-				else{
-					if(dataRecvd[0] == 0x12) {
+				//create broadcast ack pack
+				Packet *pk = pack(NULL, S_BCAST_ACK, -1, NULL);
+				Sendto(sockfd, pk->data, pk->len, remoteAddr, sizeof(struct sockaddr_in));
+				freePacket(pk);
+				free(dataRecvd);
+				free(remoteAddr);
+				break;
+			case R_BCAST_ACK:
 #ifdef DEBUG
-						printf("received from %s at %d packet is 12\n", 
-								inet_ntop(AF_INET, &remoteAddr->sin_addr, 
-								ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
+				printf("received from %s at %d packet is 12\n", 
+						inet_ntop(AF_INET, &remoteAddr->sin_addr, 
+						ipBuf, sizeof(ipBuf)), ntohs(remoteAddr->sin_port));
 #endif
-						pos = 1;
-						if(friendList.curPos < 255) {
-							for(int i=0; i<IP_LEN && dataRecvd[pos] != '\0'; i++, pos++){
-								friendList.data[friendList.curPos][i] = dataRecvd[pos]; 
-							}
-							friendList.curPos++;
-						}
-						/*print ip of friends*/
-						for(int i=0; i<friendList.curPos; i++) {
-							printf("$%d:%s\n", i,friendList.data[i]); 
-						}
+				pos = 1;
+				if(friendList.curPos < 255) {
+					for(int i=0; i<IP_LEN && dataRecvd[pos] != '\0'; i++, pos++){
+						friendList.data[friendList.curPos][i] = dataRecvd[pos]; 
 					}
+					friendList.curPos++;
 				}
-			}
-			free(dataRecvd);
-			free(remoteAddr);	
-		}	
-	}
+				/*print ip of friends*/
+				for(int i=0; i<friendList.curPos; i++) {
+					printf("$%d:%s\n", i,friendList.data[i]); 
+				}
+				free(dataRecvd);
+				free(remoteAddr);
+				break;
+		}
+	}	
 }
 
 void setRemoteIP(struct sockaddr_in *remoteAddr, char *remoteIp, int port){
@@ -268,7 +269,7 @@ void *sendFileProc(void *args)
 				perror("error!\n");
 		}
 		
-		if(dataRecvd[0] == 0x04){
+		if(dataRecvd[0] == R_DATA_ACK){
 #ifdef DEBUG
 			printf("received from %s at %d packet is 04\n", 
 				 	inet_ntop(AF_INET, &remoteAddr.sin_addr, 
@@ -349,13 +350,14 @@ void *recvFileProc(void *args)
 	freePacket(pk);
 	free(buffer);
 	free(remoteIp);
+	free((DataAndIp*)args);
 #ifdef _TIMER
 	/*start timer*/
 	setTimer(curInterval, &orignalTime);
 #endif
 	/*remote ip address*/
 	struct sockaddr_in remoteAddr;
-	socklen_t remoteAddrLen;
+	socklen_t remoteAddrLen = sizeof(struct sockaddr_in);
 	BYTE dataRecvd[TYPE+BLOCKNUM+BLOCK];
 	char ipBuf[IP_LEN];
 	while(1){
@@ -368,7 +370,7 @@ void *recvFileProc(void *args)
 			if(n == -1)
 				perror("error!\n");
 		}
-		if(dataRecvd[pos] == 0x02){
+		if(dataRecvd[0] == R_DATA){
 #ifdef DEBUG
 			printf("received from %s at %d packet is 02\n", 
 				   inet_ntop(AF_INET, &remoteAddr.sin_addr, 
@@ -390,7 +392,7 @@ void *recvFileProc(void *args)
 				/*request next block*/
 				fileToRecv.preBlk = fileToRecv.curBlk;
 				Packet *pk = pack(NULL, S_ACK, fileToRecv.curBlk, NULL);
-				Sendto(sockfd, pk->data, pk->len, &remoteAddr, sizeof(struct sockaddr_in));
+				Sendto(recvFileSock, pk->data, pk->len, &remoteAddr, sizeof(struct sockaddr_in));
 				freePacket(pk);
 				/*reset timer*/
 #ifdef _TIMER
