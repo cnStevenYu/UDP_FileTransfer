@@ -10,7 +10,7 @@ Features:
 
 
 Compile:
-  gcc Makefile
+  \tgcc Makefile
   
 Usage:
 
